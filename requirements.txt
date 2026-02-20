@@ -1,0 +1,6 @@
+fastapi
+pydantic
+skyfield
+matplotlib
+numpy
+requests
