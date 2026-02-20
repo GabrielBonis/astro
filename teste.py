@@ -1,6 +1,6 @@
 import requests
 
-url = "http://127.0.0.1:8000/sky-map"
+url = "https://astro-i9pkchovr-gbonis-projects.vercel.app/sky-map"
 dados = {
   "lat": -23.55,
   "lon": -46.63,
