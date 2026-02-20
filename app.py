@@ -25,13 +25,13 @@ def startup_data():
         eph = load('de421.bsp')
         with load.open(hipparcos.URL) as f:
             stars = hipparcos.load_dataframe(f)
-        bright_stars = stars[stars['magnitude'] <= 5.5].copy()
+        bright_stars = stars[stars['magnitude'] <= 5.8].copy()
         
-        # Carregar constelações apenas uma vez
         url = "https://raw.githubusercontent.com/Stellarium/stellarium/master/skycultures/modern_st/constellationship.fab"
         try:
-            resp = requests.get(url, timeout=5)
+            resp = requests.get(url, timeout=10)
             if resp.status_code == 200:
+                constellation_pairs_radec = []
                 for linha in resp.text.splitlines():
                     partes = linha.split()
                     if len(partes) < 3: continue
@@ -46,12 +46,13 @@ def startup_data():
 def obter_nome_local(lat, lon):
     try:
         url = f"https://nominatim.openstreetmap.org/reverse?format=json&lat={lat}&lon={lon}&zoom=10"
-        resp = requests.get(url, headers={'User-Agent': 'SkyMap/1.0'}, timeout=3)
+        headers = {'User-Agent': f'AstroFrame_{datetime.now().timestamp()}'}
+        resp = requests.get(url, headers=headers, timeout=5)
         if resp.status_code == 200:
             addr = resp.json().get('address', {})
-            cidade = addr.get('city') or addr.get('town') or addr.get('village') or "LOCAL"
+            cidade = addr.get('city') or addr.get('town') or addr.get('village') or addr.get('suburb') or addr.get('state')
             pais = addr.get('country', '')
-            return f"{cidade}, {pais}".upper()
+            if cidade and pais: return f"{cidade}, {pais}".upper()
     except: pass
     return "COORDENADAS SELECIONADAS"
 
@@ -59,7 +60,7 @@ class SkyMapRequest(BaseModel):
     lat: float
     lon: float
     date: str
-    title: str = "O CÉU NAQUELE MOMENTO"
+    title: str = "O NASCER DE UMA ESTRELA"
 
 def project(ra_hours, dec_deg, lst, lat_rad):
     dec_rad = np.radians(dec_deg)
@@ -72,7 +73,7 @@ def project(ra_hours, dec_deg, lst, lat_rad):
 
 @app.post("/sky-map")
 async def generate_sky_map(req: SkyMapRequest):
-    startup_data() # Garante que os dados estão carregados
+    startup_data()
     ts = load.timescale()
     try:
         dt = datetime.strptime(req.date, "%Y-%m-%d")
@@ -84,38 +85,53 @@ async def generate_sky_map(req: SkyMapRequest):
         mask = alt > 0
         x, y, mag = az[mask], 90 - alt[mask], bright_stars['magnitude'].values[mask]
 
-        # DPI reduzido para evitar crash de memória no Vercel (Hobby)
-        DPI = 150 
-        fig = plt.figure(figsize=(10, 14), facecolor='#050508')
-        fig.subplots_adjust(bottom=0.2)
+        DPI = 300
+        fig = plt.figure(figsize=(12, 18), facecolor='#050508')
+        fig.subplots_adjust(bottom=0.25, top=0.92)
+        
         ax = fig.add_subplot(111, projection='polar')
         ax.set_facecolor('#050508')
         ax.set_theta_zero_location('N')
         ax.set_theta_direction(-1)
         ax.set_ylim(0, 90)
-        ax.grid(True, color='white', alpha=0.1)
+        ax.grid(True, color='white', alpha=0.08, linewidth=0.5)
         ax.set_xticks([]); ax.set_yticks([])
+        ax.spines['polar'].set_color('white')
+        ax.spines['polar'].set_linewidth(1.2)
 
         for (r1, d1), (r2, d2) in constellation_pairs_radec:
             az1, alt1 = project(r1, d1, lst, lat_rad)
             az2, alt2 = project(r2, d2, lst, lat_rad)
-            if alt1 > -2 or alt2 > -2:
+            if alt1 > 0 and alt2 > 0:
                 xc, yc = [az1, az2], [90-alt1, 90-alt2]
                 if abs(az1-az2) > np.pi:
                     if az1 > az2: xc[1] += 2*np.pi
                     else: xc[0] += 2*np.pi
-                ax.plot(xc, yc, color='white', alpha=0.2, linewidth=0.5)
+                ax.plot(xc, yc, color='white', alpha=0.2, linewidth=0.6, zorder=2)
 
-        size = (np.clip(6 - mag, 0.5, None) ** 1.3) * (DPI / 100)
-        ax.scatter(x, y, s=size, color='white', alpha=1.0, edgecolors='none', zorder=4)
-        ax.scatter(0, 0, s=20, color='#050508', edgecolors='white', linewidth=1, zorder=5)
+        sizes = (1.2 + (6 - mag) * 0.3) * (DPI / 250)
+        ax.scatter(x, y, s=sizes*3, color='white', alpha=0.1, edgecolors='none', zorder=3)
+        ax.scatter(x, y, s=sizes, color='white', alpha=1.0, edgecolors='none', zorder=4)
+        ax.scatter(0, 0, s=25, color='#050508', edgecolors='white', linewidth=1.2, zorder=5)
 
-        plt.text(0.5, 0.15, " ".join(req.title.upper()), color='white', size=18, ha='center', transform=fig.transFigure)
-        plt.text(0.5, 0.10, " ".join(obter_nome_local(req.lat, req.lon)), color='white', ha='center', transform=fig.transFigure, size=10, alpha=0.8)
-        plt.text(0.5, 0.07, req.date, color='white', ha='center', transform=fig.transFigure, size=8, alpha=0.5)
+        t_font = {'fontfamily': 'sans-serif', 'fontweight': 'light'}
+        b_font = {'fontfamily': 'sans-serif', 'fontweight': 'normal'}
+        c_font = {'fontfamily': 'monospace', 'fontweight': 'light'}
+
+        plt.text(0.5, 0.18, " ".join(req.title.upper()), color='white', size=24, ha='center', transform=fig.transFigure, **t_font)
+        
+        local_name = obter_nome_local(req.lat, req.lon)
+        plt.text(0.5, 0.13, " ".join(local_name), color='white', ha='center', transform=fig.transFigure, size=11, alpha=0.9, **b_font)
+        
+        data_ext = dt.strftime('%d de %B de %Y').upper()
+        plt.text(0.5, 0.10, " ".join(data_ext), color='white', ha='center', transform=fig.transFigure, size=10, alpha=0.7, **b_font)
+        
+        lat_dir, lon_dir = ('S' if req.lat < 0 else 'N'), ('W' if req.lon < 0 else 'E')
+        coords = f"{abs(req.lat):.4f}° {lat_dir}   |   {abs(req.lon):.4f}° {lon_dir}"
+        plt.text(0.5, 0.06, coords, color='white', ha='center', transform=fig.transFigure, size=9, alpha=0.35, **c_font)
 
         buf = io.BytesIO()
-        plt.savefig(buf, format='png', facecolor='#050508', bbox_inches='tight', dpi=DPI)
+        plt.savefig(buf, format='png', facecolor='#050508', bbox_inches='tight', pad_inches=0.6, dpi=DPI)
         plt.close(fig)
         buf.seek(0)
         return Response(content=buf.getvalue(), media_type="image/png")
